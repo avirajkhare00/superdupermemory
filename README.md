@@ -12,7 +12,11 @@ Agents are stateless between sessions. Every conversation re-establishes context
 - **Update semantics** — same-subject facts are upserted; previous value is preserved in `previous_body`
 - **Crash-safe storage** — SQLite with WAL mode, schema versioning, online backup/restore
 - **Access tracking** — `access_count` and `last_accessed_at` updated on every recall, foundation for future decay scoring
-- **Eval harness** — 28 deterministic, LLM-free test cases across 7 categories (basic recall, semantic recall, multi-fact, contradiction, forget, disambiguation, scale), with hit@1/hit@k/MRR/p50/p95 metrics and baseline comparison
+- **Encryption at rest** — AES-256-GCM field encryption of fact bodies, activated via `SDM_ENCRYPTION_KEY`
+- **Audit log** — every `remember` and `forget` event is logged with subject, source, and timestamp
+- **One-command install** — `superdupermemory install` writes MCP config for Claude Code, Cursor, and Codex CLI
+- **Offline benchmark** — `superdupermemory bench` measures insert rate and recall latency with no network calls
+- **Eval harness** — 28 deterministic, LLM-free test cases across 7 categories with hit@1/hit@k/MRR/p50/p95 metrics
 - **Zero cloud dependency** — fully offline when using local embedder + local extractor
 
 ## Architecture
@@ -20,7 +24,7 @@ Agents are stateless between sessions. Every conversation re-establishes context
 ```
 crates/
   core/    — Fact struct, Extractor trait, Anthropic + OpenAI extractors
-  store/   — MemoryStore trait, SQLite implementation
+  store/   — MemoryStore trait, SQLite implementation, AES-256-GCM cipher
   embed/   — Embedder trait, FastEmbedder (local) + OpenAIEmbedder
   server/  — MCP server binary with CLI subcommands
   eval/    — Deterministic eval harness
@@ -55,28 +59,34 @@ OPENAI_API_KEY=sk-...
 SDM_EXTRACTOR=openai          # default: anthropic
 
 # Optional overrides
-SDM_EXTRACTOR_MODEL=gpt-5.4-mini   # default depends on provider
-SDM_EMBEDDER=openai                # default: local
+SDM_EXTRACTOR_MODEL=gpt-5.4-mini        # default depends on provider
+SDM_EMBEDDER=openai                     # default: local
 SDM_DB_PATH=~/.superdupermemory/memory.db  # default
+
+# Optional: encrypt fact bodies at rest with AES-256-GCM
+SDM_ENCRYPTION_KEY=<64 hex characters>  # generate with: openssl rand -hex 32
 ```
 
-### Add to Claude Code
+### Add to your agent
+
+Run the install command to auto-write config for all supported clients:
+
+```sh
+superdupermemory install
+```
+
+Or target a specific client:
+
+```sh
+superdupermemory install --claude-code   # ~/.claude/settings.json
+superdupermemory install --cursor        # ~/.cursor/mcp.json
+superdupermemory install --codex         # prints YAML snippet to stdout
+```
+
+To add manually to Claude Code:
 
 ```sh
 claude mcp add superdupermemory -- /path/to/superdupermemory serve
-```
-
-Or edit `~/.claude/settings.json` directly:
-
-```json
-{
-  "mcpServers": {
-    "superdupermemory": {
-      "command": "/path/to/superdupermemory",
-      "args": ["serve"]
-    }
-  }
-}
 ```
 
 ## CLI
@@ -86,24 +96,36 @@ superdupermemory [--db <path>] <subcommand>
 
 Subcommands:
   serve      Start the MCP server over stdio (default when no subcommand given)
+  install    Write MCP config for Claude Code, Cursor, and/or Codex CLI
   inspect    List recent facts stored in memory
   stats      Show database statistics
+  audit      Show the audit log (remember/forget events)
   backup     Online backup to a file (safe while server is running)
   restore    Restore from a backup file
   check      Run SQLite integrity check
+  bench      Run an insert + recall benchmark using the local embedder
 ```
 
 Examples:
 
 ```sh
-# Show what's stored
+# Auto-install for all supported clients
+superdupermemory install
+
+# Show what's stored (decrypts if SDM_ENCRYPTION_KEY is set)
 superdupermemory inspect --limit 50
+
+# Show audit history
+superdupermemory audit --limit 100
 
 # Database stats
 superdupermemory stats
 
 # Back up
 superdupermemory backup ~/backups/memory-$(date +%Y%m%d).db
+
+# Benchmark (offline, no API calls)
+superdupermemory bench --facts 200 --queries 50
 
 # Check integrity
 superdupermemory check
@@ -133,6 +155,28 @@ Delete a fact by ID.
 
 ```
 forget(id: "uuid-of-the-fact")
+```
+
+## Encryption at rest
+
+Set `SDM_ENCRYPTION_KEY` to a 64-character hex string (32 bytes) to enable AES-256-GCM encryption of fact `body` and `previous_body` fields before they are written to SQLite.
+
+```sh
+# Generate a key
+openssl rand -hex 32
+
+# Add to .env
+SDM_ENCRYPTION_KEY=a3f1...
+```
+
+Encrypted values are stored with a `$enc$` prefix. Data stored before the key was set is read as plaintext and re-encrypted on the next update — there is no forced migration. Removing the key from the environment leaves encrypted rows unreadable until it is restored.
+
+## Audit log
+
+Every `remember` and `forget` call is logged to an `audit_log` table with the event type (`remember_create`, `remember_update`, `forget`), fact ID, subject, source, and timestamp. View it with:
+
+```sh
+superdupermemory audit --limit 50
 ```
 
 ## Eval harness
@@ -165,6 +209,7 @@ Categories: `basic_recall`, `semantic_recall`, `multi_fact`, `contradiction`, `f
 | `SDM_EXTRACTOR_MODEL` | provider default | Override the extraction model |
 | `SDM_EMBEDDER` | `local` | Embedding provider: `local` or `openai` |
 | `SDM_EMBEDDER_MODEL` | provider default | Override the embedding model |
+| `SDM_ENCRYPTION_KEY` | — | 64 hex chars — enables AES-256-GCM encryption at rest |
 | `ANTHROPIC_API_KEY` | — | Required when `SDM_EXTRACTOR=anthropic` |
 | `OPENAI_API_KEY` | — | Required when `SDM_EXTRACTOR=openai` or `SDM_EMBEDDER=openai` |
 
@@ -178,9 +223,9 @@ Categories: `basic_recall`, `semantic_recall`, `multi_fact`, `contradiction`, `f
 | 1 | Done | `remember` / `recall` / `forget` end-to-end pipeline |
 | 2 | Done | Eval harness — 28 cases, metrics, baseline comparison |
 | 3 | Done | Crash-safe storage, access tracking, CLI subcommands |
-| 4 | Planned | Client integrations (Claude Code, Cursor, Codex CLI config) |
-| 5 | Planned | Security hardening — encryption at rest, deletion audit, OSS release |
-| 6 | Planned | Operational proof — latency/footprint/cost numbers, external validation |
+| 4 | Done | `install` subcommand — auto-configure Claude Code, Cursor, Codex CLI |
+| 5 | Done | AES-256-GCM encryption at rest, audit log |
+| 6 | Done | `bench` subcommand — offline insert/recall benchmark with p50/p95 |
 
 ## License
 
