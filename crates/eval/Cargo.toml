@@ -1,0 +1,19 @@
+[package]
+name = "superdupermemory-eval"
+description = "Eval harness for superdupermemory — synthetic recall/contradiction tasks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sdm-eval"
+path = "src/main.rs"
+
+[dependencies]
+superdupermemory-core.workspace = true
+superdupermemory-store.workspace = true
+superdupermemory-embed.workspace = true
+
+tokio.workspace = true
+anyhow.workspace = true

@@ -2699,6 +2699,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "superdupermemory-eval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "superdupermemory-core",
+ "superdupermemory-embed",
+ "superdupermemory-store",
+ "tokio",
+]
+
+[[package]]
 name = "superdupermemory-store"
 version = "0.1.0"
 dependencies = [
