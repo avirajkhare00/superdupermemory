@@ -10,6 +10,9 @@ use tools::MemoryServer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env from the current directory (or any parent). Silently ignore if absent.
+    let _ = dotenvy::dotenv();
+
     let db_path = std::env::var("SDM_DB_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         format!("{home}/.superdupermemory/memory.db")

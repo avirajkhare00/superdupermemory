@@ -2,3 +2,5 @@
 /.fastembed_cache
 /.bakes
 /src
+.env
+.env.local
