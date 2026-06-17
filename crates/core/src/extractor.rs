@@ -109,9 +109,10 @@ impl OpenAIExtractor {
 #[async_trait]
 impl Extractor for OpenAIExtractor {
     async fn extract(&self, text: &str, source: &str) -> anyhow::Result<Vec<Fact>> {
+        // No response_format constraint — the system prompt asks for a bare JSON array,
+        // and without json_object mode the model actually returns one.
         let payload = serde_json::json!({
             "model": self.model,
-            "response_format": { "type": "json_object" },
             "messages": [
                 { "role": "system", "content": EXTRACTION_SYSTEM_PROMPT },
                 { "role": "user",   "content": text }
@@ -129,22 +130,18 @@ impl Extractor for OpenAIExtractor {
             .json::<serde_json::Value>()
             .await?;
 
-        // OpenAI returns the JSON object under choices[0].message.content.
-        // We asked for a json_object but the prompt instructs a bare array,
-        // so wrap it in a key to satisfy the json_object requirement if needed.
         let raw = response["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("unexpected OpenAI response shape"))?;
+            .ok_or_else(|| anyhow::anyhow!("unexpected OpenAI response shape: {response}"))?;
 
-        // Try bare array first; if that fails try {"facts": [...]} wrapper.
-        parse_facts(raw, source).or_else(|_| {
-            let v: serde_json::Value = serde_json::from_str(raw)?;
-            let arr = v
-                .get("facts")
-                .or_else(|| v.as_object().and_then(|o| o.values().next()))
-                .ok_or_else(|| anyhow::anyhow!("cannot find fact array in OpenAI response"))?
-                .to_string();
-            parse_facts(&arr, source)
-        })
+        // Strip markdown fences if the model wrapped the array.
+        let stripped = raw
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        parse_facts(stripped, source)
     }
 }
