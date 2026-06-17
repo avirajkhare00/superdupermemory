@@ -34,7 +34,7 @@ thiserror = "2"
 rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
 
 # storage
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "backup"] }
 
 # embeddings
 fastembed = "5.17.2"
@@ -44,6 +44,9 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # .env file loading
 dotenvy = "0.15"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
 
 # internal crates
 superdupermemory-core = { path = "crates/core" }
