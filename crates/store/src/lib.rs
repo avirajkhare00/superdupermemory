@@ -5,11 +5,12 @@ use superdupermemory_core::Fact;
 
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
-    /// Persist a fact. If a fact with the same subject already exists, update it.
-    async fn save(&self, fact: &Fact) -> anyhow::Result<()>;
+    /// Persist a fact with an optional embedding vector.
+    /// If a fact with the same id already exists, it is updated in place.
+    async fn save(&self, fact: &Fact, embedding: Option<&[f32]>) -> anyhow::Result<()>;
 
-    /// Return all facts whose embedding is closest to `embedding`, up to `limit` results.
-    /// Falls back to returning all facts ordered by recency when no embeddings are stored.
+    /// Return facts whose stored embedding is closest to `embedding` (cosine similarity),
+    /// up to `limit` results. Falls back to recency order when no embeddings are stored.
     async fn search_by_embedding(
         &self,
         embedding: &[f32],

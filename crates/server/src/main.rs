@@ -1,7 +1,11 @@
 mod tools;
 
+use std::sync::Arc;
+
 use anyhow::Context;
 use rmcp::{ServiceExt, transport::stdio};
+use superdupermemory_core::extractor::AnthropicExtractor;
+use superdupermemory_embed::FastEmbedder;
 use tools::MemoryServer;
 
 #[tokio::main]
@@ -11,13 +15,22 @@ async fn main() -> anyhow::Result<()> {
         format!("{home}/.superdupermemory/memory.db")
     });
 
-    // Ensure the data directory exists.
     if let Some(parent) = std::path::Path::new(&db_path).parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating data dir {}", parent.display()))?;
     }
 
-    let server = MemoryServer::new(&db_path)?;
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY must be set for fact extraction")?;
+
+    // FastEmbedder loads an ONNX model on first call — do it on a blocking thread.
+    let embedder = tokio::task::spawn_blocking(|| FastEmbedder::new())
+        .await
+        .context("embedder init panicked")??;
+
+    let extractor = AnthropicExtractor::new(api_key);
+
+    let server = MemoryServer::new(&db_path, Arc::new(extractor), Arc::new(embedder))?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

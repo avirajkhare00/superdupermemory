@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rmcp::{
     ServerHandler,
     handler::server::wrapper::Parameters,
@@ -6,14 +8,15 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use superdupermemory_core::Fact;
+use superdupermemory_core::{Extractor, Fact};
+use superdupermemory_embed::Embedder;
 use superdupermemory_store::{MemoryStore, SqliteStore};
 
 // ── parameter structs ──────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RememberParams {
-    /// The text to store as a memory fact.
+    /// The text to extract facts from and persist.
     pub text: String,
     /// Optional source label (e.g. "claude-code-session", "manual").
     pub source: Option<String>,
@@ -37,49 +40,73 @@ pub struct ForgetParams {
 
 #[derive(Clone)]
 pub struct MemoryServer {
-    store: std::sync::Arc<SqliteStore>,
+    store: Arc<SqliteStore>,
+    extractor: Arc<dyn Extractor>,
+    embedder: Arc<dyn Embedder>,
 }
 
 impl MemoryServer {
-    pub fn new(db_path: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        db_path: &str,
+        extractor: Arc<dyn Extractor>,
+        embedder: Arc<dyn Embedder>,
+    ) -> anyhow::Result<Self> {
         let store = SqliteStore::open(db_path)?;
         Ok(Self {
-            store: std::sync::Arc::new(store),
+            store: Arc::new(store),
+            extractor,
+            embedder,
         })
     }
 }
 
 #[tool_router]
 impl MemoryServer {
-    /// Store a piece of information as a persistent memory fact.
-    /// Returns the fact ID so the caller can reference it later.
-    #[tool(description = "Store information as a persistent memory fact")]
+    /// Extract discrete facts from the provided text and store them with embeddings.
+    /// Returns the IDs and subjects of all facts that were saved.
+    #[tool(description = "Extract and store information as persistent memory facts")]
     async fn remember(&self, Parameters(params): Parameters<RememberParams>) -> String {
         let source = params.source.unwrap_or_else(|| "mcp-tool".to_string());
-        // Phase 0: store raw text as a single fact.
-        // Phase 1 will route through AnthropicExtractor to split into discrete facts.
-        let fact = Fact::new("raw.text", &params.text, &source);
-        let id = fact.id.clone();
-        match self.store.save(&fact).await {
-            Ok(()) => format!("ok: stored {id}"),
-            Err(e) => format!("error: {e}"),
+
+        // 1. Extract discrete facts from raw text.
+        let facts = match self.extractor.extract(&params.text, &source).await {
+            Ok(f) if !f.is_empty() => f,
+            Ok(_) => vec![Fact::new("raw.text", &params.text, &source)],
+            Err(e) => return format!("error: extraction failed — {e}"),
+        };
+
+        // 2. Embed and store each fact.
+        let mut stored = Vec::with_capacity(facts.len());
+        for fact in &facts {
+            let embed_input = format!("{}: {}", fact.subject, fact.body);
+            let embedding = match self.embedder.embed(&embed_input).await {
+                Ok(v) => v,
+                Err(e) => return format!("error: embedding failed — {e}"),
+            };
+            if let Err(e) = self.store.save(fact, Some(&embedding)).await {
+                return format!("error: store failed — {e}");
+            }
+            stored.push(format!("{} ({})", fact.id, fact.subject));
         }
+
+        format!("ok: {} fact(s) stored\n{}", stored.len(), stored.join("\n"))
     }
 
-    /// Search stored memory facts and return the best matches for a query.
+    /// Embed the query and return the closest stored memory facts by cosine similarity.
     #[tool(description = "Retrieve stored memory facts matching a query")]
     async fn recall(&self, Parameters(params): Parameters<RecallParams>) -> String {
         let limit = params.limit.unwrap_or(10);
-        match self.store.search_by_text(&params.query, limit).await {
+
+        let embedding = match self.embedder.embed(&params.query).await {
+            Ok(v) => v,
+            Err(e) => return format!("error: embedding failed — {e}"),
+        };
+
+        match self.store.search_by_embedding(&embedding, limit).await {
             Ok(facts) if facts.is_empty() => "No matching facts found.".to_string(),
             Ok(facts) => facts
                 .iter()
-                .map(|f| {
-                    format!(
-                        "[{}] {} — {} (updated {})",
-                        f.id, f.subject, f.body, f.updated_at
-                    )
-                })
+                .map(|f| format!("[{}] {}: {}", f.id, f.subject, f.body))
                 .collect::<Vec<_>>()
                 .join("\n"),
             Err(e) => format!("error: {e}"),
