@@ -179,6 +179,27 @@ Every `remember` and `forget` call is logged to an `audit_log` table with the ev
 superdupermemory audit --limit 50
 ```
 
+## How the AI decides what to remember
+
+Superdupermemory does not store anything automatically. The agent only remembers when it explicitly calls the `remember` tool — which means you control what gets stored by instructing the agent in your `CLAUDE.md`.
+
+The recommended pattern is a standing instruction at the end of your `CLAUDE.md`:
+
+```markdown
+At the end of every session, call superdupermemory remember() with any new facts
+learned about the user, their preferences, project decisions, or technical choices.
+At the start of every session, call superdupermemory recall() to load relevant context.
+```
+
+With this in place:
+- The agent loads what it already knows at session start
+- It stores new facts it learned at session end
+- You stay in control of what counts as "memory-worthy" — the agent judges this, not an automated trigger
+
+**Why not store everything automatically?** Storing every file path, error message, and intermediate thought would flood the database with noise. The extraction pipeline already distills raw text into discrete facts — you still need the agent to decide *what text* is worth feeding it.
+
+See [`CLAUDE.example.md`](CLAUDE.example.md) for a ready-to-use template.
+
 ## Eval harness
 
 Run the full eval suite (downloads the local embedding model on first run):
