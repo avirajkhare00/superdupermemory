@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/store",
+    "crates/embed",
+    "crates/server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aviraj Khare <aviraj.khare@funstop.io>"]
+
+[workspace.dependencies]
+# async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# utilities
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+
+# MCP
+rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
+
+# storage
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+
+# embeddings
+fastembed = "5.17.2"
+
+# HTTP client (Anthropic API)
+reqwest = { version = "0.12", features = ["json"] }
+
+# internal crates
+superdupermemory-core = { path = "crates/core" }
+superdupermemory-store = { path = "crates/store" }
+superdupermemory-embed = { path = "crates/embed" }
