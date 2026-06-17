@@ -7,6 +7,10 @@ pub enum Category {
     MultiFact,
     Contradiction,
     Forget,
+    /// Multiple similar facts — must pick the right one at k=1.
+    Disambiguation,
+    /// Large fact pool (20 / 50 / 100 noise facts) — tests ranking under scale.
+    Scale,
 }
 
 impl Category {
@@ -17,45 +21,43 @@ impl Category {
             Self::MultiFact => "multi_fact",
             Self::Contradiction => "contradiction",
             Self::Forget => "forget",
+            Self::Disambiguation => "disambiguation",
+            Self::Scale => "scale",
         }
     }
 }
 
-/// A single eval case.
 pub struct EvalCase {
-    pub name: &'static str,
+    pub name: String,
     pub category: Category,
-    /// Facts to insert before querying.
     pub setup: Vec<Fact>,
-    /// IDs of facts to delete after setup (for the Forget category).
     pub delete_ids: Vec<String>,
-    /// The recall query.
-    pub query: &'static str,
-    /// Subjects that must appear in the top-k results for this case to pass.
-    pub expected_subjects: Vec<&'static str>,
+    pub query: String,
+    /// Subjects that must appear in top-k for this case to pass.
+    pub expected_subjects: Vec<String>,
     pub k: usize,
 }
 
 impl EvalCase {
     pub fn new(
-        name: &'static str,
+        name: impl Into<String>,
         category: Category,
-        setup: Vec<(&'static str, &'static str)>,
-        query: &'static str,
-        expected_subjects: Vec<&'static str>,
+        setup: Vec<(&str, &str)>,
+        query: impl Into<String>,
+        expected_subjects: Vec<&str>,
         k: usize,
     ) -> Self {
         let facts = setup
             .into_iter()
-            .map(|(subj, body)| Fact::new(subj, body, "eval"))
+            .map(|(s, b)| Fact::new(s, b, "eval"))
             .collect();
         Self {
-            name,
+            name: name.into(),
             category,
             setup: facts,
             delete_ids: vec![],
-            query,
-            expected_subjects,
+            query: query.into(),
+            expected_subjects: expected_subjects.into_iter().map(str::to_string).collect(),
             k,
         }
     }
