@@ -1,4 +1,5 @@
 pub mod fast;
+pub mod openai;
 
 use async_trait::async_trait;
 
@@ -12,3 +13,4 @@ pub trait Embedder: Send + Sync {
 }
 
 pub use fast::FastEmbedder;
+pub use openai::OpenAIEmbedder;

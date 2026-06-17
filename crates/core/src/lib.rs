@@ -1,5 +1,5 @@
 pub mod extractor;
 pub mod fact;
 
-pub use extractor::Extractor;
+pub use extractor::{AnthropicExtractor, Extractor, OpenAIExtractor};
 pub use fact::Fact;

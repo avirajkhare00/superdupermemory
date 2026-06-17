@@ -2686,6 +2686,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "fastembed",
+ "reqwest",
+ "serde_json",
  "tokio",
 ]
 
