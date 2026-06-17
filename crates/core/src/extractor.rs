@@ -95,7 +95,7 @@ impl OpenAIExtractor {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            model: "gpt-4o-mini".to_string(),
+            model: "gpt-5.4-mini".to_string(),
             client: reqwest::Client::new(),
         }
     }
