@@ -1,3 +1,5 @@
+mod bench;
+mod install;
 mod tools;
 
 use std::sync::Arc;
@@ -7,10 +9,10 @@ use clap::{Parser, Subcommand};
 use rmcp::{ServiceExt, transport::stdio};
 use superdupermemory_core::extractor::{AnthropicExtractor, OpenAIExtractor};
 use superdupermemory_embed::{Embedder, FastEmbedder, OpenAIEmbedder};
-use superdupermemory_store::{MemoryStore, SqliteStore};
+use superdupermemory_store::{Cipher, MemoryStore, SqliteStore};
 use tools::MemoryServer;
 
-// ── CLI definition ─────────────────────────────────────────────────────────
+// ── CLI ────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(name = "superdupermemory", version, about = "Local-first memory layer for AI agents (MCP)")]
@@ -28,9 +30,21 @@ enum Command {
     /// Start the MCP server over stdio (default when no subcommand given).
     Serve,
 
+    /// Write MCP config for Claude Code, Cursor, and/or Codex CLI.
+    Install {
+        /// Install only for Claude Code.
+        #[arg(long)]
+        claude_code: bool,
+        /// Install only for Cursor.
+        #[arg(long)]
+        cursor: bool,
+        /// Print Codex CLI config snippet (no auto-write).
+        #[arg(long)]
+        codex: bool,
+    },
+
     /// List recent facts stored in memory.
     Inspect {
-        /// Maximum number of facts to show.
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
     },
@@ -38,20 +52,34 @@ enum Command {
     /// Show database statistics.
     Stats,
 
-    /// Back up the database to a file using SQLite's online backup API.
+    /// Show the audit log (remember/forget events).
+    Audit {
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Back up the database (online — safe while server is running).
     Backup {
-        /// Destination file path.
         dest: String,
     },
 
     /// Restore the database from a backup file.
     Restore {
-        /// Source backup file path.
         src: String,
     },
 
-    /// Run SQLite's integrity_check PRAGMA and report the result.
+    /// Run SQLite PRAGMA integrity_check.
     Check,
+
+    /// Run an insert + recall benchmark using the local embedder.
+    Bench {
+        /// Number of facts to insert.
+        #[arg(long, default_value_t = 100)]
+        facts: usize,
+        /// Number of recall queries to run.
+        #[arg(long, default_value_t = 20)]
+        queries: usize,
+    },
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -65,12 +93,19 @@ fn resolve_db_path(raw: &str) -> String {
     }
 }
 
-fn open_store(db_path: &str) -> anyhow::Result<SqliteStore> {
+fn load_cipher() -> anyhow::Result<Option<Cipher>> {
+    match std::env::var("SDM_ENCRYPTION_KEY") {
+        Ok(hex) => Ok(Some(Cipher::from_hex(&hex).context("invalid SDM_ENCRYPTION_KEY")?)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn open_store(db_path: &str, cipher: Option<Cipher>) -> anyhow::Result<SqliteStore> {
     if let Some(parent) = std::path::Path::new(db_path).parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating data dir {}", parent.display()))?;
+            .with_context(|| format!("creating data directory {}", parent.display()))?;
     }
-    SqliteStore::open(db_path)
+    SqliteStore::open_with_cipher(db_path, cipher)
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -78,56 +113,78 @@ fn open_store(db_path: &str) -> anyhow::Result<SqliteStore> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
-
     let cli = Cli::parse();
     let db_path = resolve_db_path(&cli.db);
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_serve(&db_path).await,
-        Command::Inspect { limit } => run_inspect(&db_path, limit).await,
-        Command::Stats => run_stats(&db_path),
-        Command::Backup { dest } => run_backup(&db_path, &dest),
-        Command::Restore { src } => run_restore(&db_path, &src),
-        Command::Check => run_check(&db_path),
+
+        Command::Install { claude_code, cursor, codex } => {
+            install::run(claude_code, cursor, codex)
+        }
+
+        Command::Inspect { limit } => {
+            let cipher = load_cipher()?;
+            run_inspect(&db_path, limit, cipher).await
+        }
+
+        Command::Stats => {
+            run_stats(&db_path)
+        }
+
+        Command::Audit { limit } => {
+            let cipher = load_cipher()?;
+            run_audit(&db_path, limit, cipher).await
+        }
+
+        Command::Backup { dest } => {
+            run_backup(&db_path, &dest)
+        }
+
+        Command::Restore { src } => {
+            run_restore(&db_path, &src)
+        }
+
+        Command::Check => {
+            run_check(&db_path)
+        }
+
+        Command::Bench { facts, queries } => {
+            bench::run(facts, queries).await
+        }
     }
 }
 
 // ── subcommand handlers ────────────────────────────────────────────────────
 
 async fn run_serve(db_path: &str) -> anyhow::Result<()> {
-    let extractor_kind = std::env::var("SDM_EXTRACTOR").unwrap_or_else(|_| "anthropic".into());
+    let cipher = load_cipher()?;
 
+    let extractor_kind = std::env::var("SDM_EXTRACTOR").unwrap_or_else(|_| "anthropic".into());
     let extractor: Arc<dyn superdupermemory_core::Extractor> = match extractor_kind.as_str() {
         "openai" => {
             let key = std::env::var("OPENAI_API_KEY")
-                .context("OPENAI_API_KEY must be set when SDM_EXTRACTOR=openai")?;
+                .context("OPENAI_API_KEY required when SDM_EXTRACTOR=openai")?;
             let mut e = OpenAIExtractor::new(key);
-            if let Ok(model) = std::env::var("SDM_EXTRACTOR_MODEL") {
-                e = e.with_model(model);
-            }
+            if let Ok(m) = std::env::var("SDM_EXTRACTOR_MODEL") { e = e.with_model(m); }
             Arc::new(e)
         }
         _ => {
             let key = std::env::var("ANTHROPIC_API_KEY")
-                .context("ANTHROPIC_API_KEY must be set when SDM_EXTRACTOR=anthropic (default)")?;
+                .context("ANTHROPIC_API_KEY required when SDM_EXTRACTOR=anthropic (default)")?;
             let mut e = AnthropicExtractor::new(key);
-            if let Ok(model) = std::env::var("SDM_EXTRACTOR_MODEL") {
-                e = e.with_model(model);
-            }
+            if let Ok(m) = std::env::var("SDM_EXTRACTOR_MODEL") { e = e.with_model(m); }
             Arc::new(e)
         }
     };
 
     let embedder_kind = std::env::var("SDM_EMBEDDER").unwrap_or_else(|_| "local".into());
-
     let embedder: Arc<dyn Embedder> = match embedder_kind.as_str() {
         "openai" => {
             let key = std::env::var("OPENAI_API_KEY")
-                .context("OPENAI_API_KEY must be set when SDM_EMBEDDER=openai")?;
+                .context("OPENAI_API_KEY required when SDM_EMBEDDER=openai")?;
             let mut e = OpenAIEmbedder::new(key);
-            if let Ok(model) = std::env::var("SDM_EMBEDDER_MODEL") {
-                e = e.with_model(model);
-            }
+            if let Ok(m) = std::env::var("SDM_EMBEDDER_MODEL") { e = e.with_model(m); }
             Arc::new(e)
         }
         _ => {
@@ -138,14 +195,14 @@ async fn run_serve(db_path: &str) -> anyhow::Result<()> {
         }
     };
 
-    let server = MemoryServer::new(db_path, extractor, embedder)?;
+    let server = MemoryServer::new(db_path, extractor, embedder, cipher)?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
 
-async fn run_inspect(db_path: &str, limit: usize) -> anyhow::Result<()> {
-    let store = open_store(db_path)?;
+async fn run_inspect(db_path: &str, limit: usize, cipher: Option<Cipher>) -> anyhow::Result<()> {
+    let store = open_store(db_path, cipher)?;
     let facts = store.list(limit).await?;
     if facts.is_empty() {
         println!("No facts stored.");
@@ -154,48 +211,76 @@ async fn run_inspect(db_path: &str, limit: usize) -> anyhow::Result<()> {
     println!("{:>4}  {:<30}  {:<20}  {}", "#", "subject", "updated_at", "body");
     println!("{}", "-".repeat(100));
     for (i, f) in facts.iter().enumerate() {
-        let body_preview: String = f.body.chars().take(60).collect();
+        let preview: String = f.body.chars().take(60).collect();
         let ellipsis = if f.body.len() > 60 { "…" } else { "" };
         println!(
             "{:>4}  {:<30}  {:<20}  {}{}",
             i + 1,
             &f.subject,
             f.updated_at.format("%Y-%m-%d %H:%M:%S"),
-            body_preview,
-            ellipsis
+            preview,
+            ellipsis,
         );
     }
     Ok(())
 }
 
 fn run_stats(db_path: &str) -> anyhow::Result<()> {
-    let store = open_store(db_path)?;
+    // Stats doesn't decrypt facts — just counts.
+    let store = open_store(db_path, None)?;
     let s = store.stats(Some(db_path))?;
     println!("superdupermemory database stats");
     println!("  schema version      : {}", s.schema_version);
     println!("  total facts         : {}", s.total_facts);
     println!("  facts with vectors  : {}", s.facts_with_embeddings);
     println!("  stale facts (>30d)  : {}", s.stale_facts);
-    println!("  db size             : {} bytes ({:.1} KB)", s.db_size_bytes, s.db_size_bytes as f64 / 1024.0);
+    println!("  audit events        : {}", s.audit_events);
+    println!(
+        "  db size             : {} bytes ({:.1} KB)",
+        s.db_size_bytes,
+        s.db_size_bytes as f64 / 1024.0
+    );
+    Ok(())
+}
+
+async fn run_audit(db_path: &str, limit: usize, cipher: Option<Cipher>) -> anyhow::Result<()> {
+    let store = open_store(db_path, cipher)?;
+    let entries = store.recent_audit(limit).await?;
+    if entries.is_empty() {
+        println!("No audit events.");
+        return Ok(());
+    }
+    println!("{:<20}  {:<18}  {:<38}  {:<30}  {}", "occurred_at", "event", "fact_id", "subject", "source");
+    println!("{}", "-".repeat(120));
+    for e in &entries {
+        println!(
+            "{:<20}  {:<18}  {:<38}  {:<30}  {}",
+            e.occurred_at.format("%Y-%m-%d %H:%M:%S"),
+            e.event,
+            e.fact_id,
+            e.fact_subject,
+            e.source,
+        );
+    }
     Ok(())
 }
 
 fn run_backup(db_path: &str, dest: &str) -> anyhow::Result<()> {
-    let store = open_store(db_path)?;
+    let store = open_store(db_path, None)?;
     let bytes = store.backup_to(dest)?;
     println!("Backup written to {} ({} bytes)", dest, bytes);
     Ok(())
 }
 
 fn run_restore(db_path: &str, src: &str) -> anyhow::Result<()> {
-    let store = open_store(db_path)?;
+    let store = open_store(db_path, None)?;
     store.restore_from(src)?;
     println!("Restored from {}", src);
     Ok(())
 }
 
 fn run_check(db_path: &str) -> anyhow::Result<()> {
-    let store = open_store(db_path)?;
+    let store = open_store(db_path, None)?;
     store.integrity_check()?;
     println!("Integrity check passed.");
     Ok(())

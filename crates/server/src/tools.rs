@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use superdupermemory_core::{Extractor, Fact};
 use superdupermemory_embed::Embedder;
-use superdupermemory_store::{MemoryStore, SqliteStore};
+use superdupermemory_store::{Cipher, MemoryStore, SqliteStore};
 
 // ── parameter structs ──────────────────────────────────────────────────────
 
@@ -50,8 +50,9 @@ impl MemoryServer {
         db_path: &str,
         extractor: Arc<dyn Extractor>,
         embedder: Arc<dyn Embedder>,
+        cipher: Option<Cipher>,
     ) -> anyhow::Result<Self> {
-        let store = SqliteStore::open(db_path)?;
+        let store = SqliteStore::open_with_cipher(db_path, cipher)?;
         Ok(Self {
             store: Arc::new(store),
             extractor,

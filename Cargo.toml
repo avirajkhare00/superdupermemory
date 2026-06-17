@@ -48,6 +48,11 @@ dotenvy = "0.15"
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
+# cryptography (field-level encryption at rest)
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+
 # internal crates
 superdupermemory-core = { path = "crates/core" }
 superdupermemory-store = { path = "crates/store" }
