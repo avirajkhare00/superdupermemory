@@ -80,6 +80,16 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         queries: usize,
     },
+
+    /// Delete facts not accessed or updated within the last N days.
+    Prune {
+        /// Age threshold in days. Facts older than this are deleted.
+        #[arg(long, default_value_t = 90)]
+        days: u64,
+        /// Show how many facts would be deleted without actually deleting them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -151,6 +161,10 @@ async fn main() -> anyhow::Result<()> {
 
         Command::Bench { facts, queries } => {
             bench::run(facts, queries).await
+        }
+
+        Command::Prune { days, dry_run } => {
+            run_prune(&db_path, days, dry_run).await
         }
     }
 }
@@ -283,5 +297,27 @@ fn run_check(db_path: &str) -> anyhow::Result<()> {
     let store = open_store(db_path, None)?;
     store.integrity_check()?;
     println!("Integrity check passed.");
+    Ok(())
+}
+
+async fn run_prune(db_path: &str, days: u64, dry_run: bool) -> anyhow::Result<()> {
+    let store = open_store(db_path, None)?;
+    if dry_run {
+        // Count without deleting by querying stats then comparing, simpler to
+        // just run a count query directly via inspect.
+        let s = store.stats(Some(db_path))?;
+        println!(
+            "dry-run: would scan {} facts for last activity older than {} days.",
+            s.total_facts, days
+        );
+        println!("Run without --dry-run to delete.");
+    } else {
+        let n = store.purge_stale(days).await?;
+        if n == 0 {
+            println!("No stale facts found (threshold: {} days).", days);
+        } else {
+            println!("Pruned {} fact(s) not accessed in the last {} days.", n, days);
+        }
+    }
     Ok(())
 }

@@ -8,19 +8,15 @@ and adjust to fit your workflow.
 This project uses [superdupermemory](https://github.com/avirajkhare00/superdupermemory)
 for persistent memory across sessions.
 
-**At the start of every session:**
-Call `superdupermemory recall()` to load relevant context before doing any work.
+**At the start of every session**, call recall() before doing any work:
 
 ```
 recall(query: "user preferences and ongoing project context", limit: 10)
 ```
 
-**During the session:**
-If the user states a preference, makes a decision, or shares something about their
-project or workflow, note it for storage at the end.
+**During the session**, note any preferences, decisions, or technical choices the user shares.
 
-**At the end of every session:**
-Call `superdupermemory remember()` with any new facts learned. Good candidates:
+**At the end of every session**, call remember() with new facts learned. Good candidates:
 
 - User preferences ("prefers Rust", "uses Neovim", "avoids classes in Python")
 - Project decisions ("switched from Postgres to SQLite", "targeting macOS ARM64 only")
@@ -47,6 +43,6 @@ Do not store:
 ## Behaviour guidelines
 
 - Load memory at session start, store at session end — do not call remember() after every single message
-- When in doubt about whether something is worth remembering, store it; it is easy to forget later
+- When in doubt about whether something is worth remembering, store it; facts are cheap, lost context is expensive
 - If the user says "remember this" or "don't forget", call remember() immediately
 - If the user says "forget that", call forget() with the relevant fact ID from the last recall result

@@ -294,6 +294,22 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// Delete facts whose last relevant timestamp (last_accessed_at ?? updated_at) is older than
+    /// `days` days. Returns the number of facts deleted.
+    pub async fn purge_stale(&self, days: u64) -> anyhow::Result<usize> {
+        self.run(move |conn| {
+            let n = conn.execute(
+                "DELETE FROM facts
+                 WHERE CAST(julianday('now') - julianday(
+                     COALESCE(last_accessed_at, updated_at)
+                 ) AS INTEGER) > ?1",
+                params![days as i64],
+            )?;
+            Ok(n)
+        })
+        .await
+    }
 }
 
 // ── embedding helpers ──────────────────────────────────────────────────────
@@ -317,6 +333,15 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+}
+
+// Exponential recency decay: exp(-0.005 * days) → half-life ~139 days.
+fn recency_score(date_str: &str) -> f32 {
+    let parsed = chrono::DateTime::parse_from_rfc3339(date_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_default();
+    let days = (chrono::Utc::now() - parsed).num_days().max(0) as f32;
+    (-0.005_f32 * days).exp()
 }
 
 // ── MemoryStore impl ───────────────────────────────────────────────────────
@@ -373,14 +398,19 @@ impl MemoryStore for SqliteStore {
         self.run(move |conn| {
             let c = cipher.as_deref();
             let mut stmt = conn.prepare(
-                "SELECT id, subject, body, source, previous_body, created_at, updated_at, embedding
+                "SELECT id, subject, body, source, previous_body, created_at, updated_at,
+                        embedding, last_accessed_at
                  FROM facts WHERE embedding IS NOT NULL",
             )?;
-            let mut rows: Vec<(Fact, Vec<f32>)> = stmt
+            // (fact, embedding_vec, recency_date) — recency_date is last_accessed_at ?? updated_at
+            let mut rows: Vec<(Fact, Vec<f32>, String)> = stmt
                 .query_map([], |row| {
                     let fact = SqliteStore::row_to_fact(row)?;
                     let blob: Vec<u8> = row.get(7)?;
-                    Ok((fact, bytes_to_f32(&blob)))
+                    let last_accessed: Option<String> = row.get(8)?;
+                    let recency_date = last_accessed
+                        .unwrap_or_else(|| fact.updated_at.to_rfc3339());
+                    Ok((fact, bytes_to_f32(&blob), recency_date))
                 })?
                 .collect::<Result<_, _>>()?;
 
@@ -398,16 +428,17 @@ impl MemoryStore for SqliteStore {
                     .collect::<anyhow::Result<_>>();
             }
 
-            rows.sort_by(|(_, a), (_, b)| {
-                cosine_similarity(&query_vec, b)
-                    .partial_cmp(&cosine_similarity(&query_vec, a))
-                    .unwrap_or(std::cmp::Ordering::Equal)
+            // Blended score: 85% cosine similarity + 15% recency decay.
+            rows.sort_by(|(_, a, rec_a), (_, b, rec_b)| {
+                let score_a = 0.85 * cosine_similarity(&query_vec, a) + 0.15 * recency_score(rec_a);
+                let score_b = 0.85 * cosine_similarity(&query_vec, b) + 0.15 * recency_score(rec_b);
+                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
             });
 
             let top: Vec<Fact> = rows
                 .into_iter()
                 .take(limit)
-                .map(|(f, _)| decrypt_fact(f, c))
+                .map(|(f, _, _)| decrypt_fact(f, c))
                 .collect::<anyhow::Result<_>>()?;
 
             let now = chrono::Utc::now().to_rfc3339();

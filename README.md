@@ -104,6 +104,7 @@ Subcommands:
   restore    Restore from a backup file
   check      Run SQLite integrity check
   bench      Run an insert + recall benchmark using the local embedder
+  prune      Delete facts not accessed or updated within the last N days
 ```
 
 Examples:
@@ -126,6 +127,10 @@ superdupermemory backup ~/backups/memory-$(date +%Y%m%d).db
 
 # Benchmark (offline, no API calls)
 superdupermemory bench --facts 200 --queries 50
+
+# Prune facts untouched for 90 days (dry-run first)
+superdupermemory prune --days 90 --dry-run
+superdupermemory prune --days 90
 
 # Check integrity
 superdupermemory check
