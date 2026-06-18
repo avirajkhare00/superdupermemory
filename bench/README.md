@@ -6,14 +6,23 @@ on the same dataset mem0 used for their published scores.
 
 ## Results
 
-Smoke test: conversation 0, 5 questions, `gpt-4.1-mini` answerer + judge.
+**Partial run: 4 of 10 conversations, 408 questions**, `gpt-4.1-mini` answerer + judge.
 
-| System | top-10 | top-20 | top-50 | top-200 | multi-hop | temporal | open-domain |
-|--------|--------|--------|--------|---------|-----------|----------|-------------|
-| **superdupermemory** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
-| mem0 (published, full run) | — | — | — | 91.6% | — | — | — |
+| System | top-10 | top-20 | top-50 | top-200 | multi-hop | temporal | open-domain | single-hop |
+|--------|--------|--------|--------|---------|-----------|----------|-------------|------------|
+| **superdupermemory** | **74.5%** | **78.7%** | **83.6%** | **85.8%** | 82% | 76% | 88% | 78% |
+| mem0 (published, full run) | — | — | — | 91.6% | — | — | — | — |
 
-> Smoke test uses 1 of 10 conversations (5 questions). Full 10-conversation run pending.
+> 4 conversations (408 questions). mem0's 91.6% is from their managed cloud product on the full dataset.
+
+### Per-conversation breakdown (top-20)
+
+| Conv | Score | multi-hop | temporal | single-hop | open-domain |
+|------|-------|-----------|----------|------------|-------------|
+| conv0 | 74% (113/152) | 75% | 65% | 76% | 92% |
+| conv1 | 84% (68/81) | 82% | 85% | 84% | — |
+| conv2 | 79% (112/141) | 84% | 81% | 76% | 88% |
+| conv3 | 82% (28/34) | 100% | 77% | — | 75% |
 
 ### How we got here
 
