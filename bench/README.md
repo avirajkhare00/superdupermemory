@@ -4,11 +4,45 @@ Runs the [LOCOMO-10](https://github.com/snap-research/locomo) benchmark against
 superdupermemory and/or mem0, producing side-by-side accuracy and latency numbers
 on the same dataset mem0 used for their published scores.
 
+## Results
+
+Smoke test: conversation 0, 5 questions, `gpt-4.1-mini` answerer + judge.
+
+| System | top-10 | top-20 | top-50 | top-200 | multi-hop | temporal | open-domain |
+|--------|--------|--------|--------|---------|-----------|----------|-------------|
+| **superdupermemory** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| mem0 (published, full run) | — | — | — | 91.6% | — | — | — |
+
+> Smoke test uses 1 of 10 conversations (5 questions). Full 10-conversation run pending.
+
+### How we got here
+
+| Run | Score (top-20) | Change |
+|-----|----------------|--------|
+| smoke1 (baseline) | **0%** | Search returned empty — `json.loads` failed silently on plain-text recall |
+| smoke2 (search fix) | **80%** | Parse `[uuid] subject: body` text format in `sdm_client` |
+| smoke3 (date prefix) | **60%** | Added `[Session date: ...]` prefix to ingested chunks; raw.text pollution hurt |
+| smoke4 (extractor prompt + raw.text fix) | *pending* | Extraction prompt resolves relative dates; strip prefix from raw.text fallback |
+| smoke5 (BM25 hybrid) | **100%** | Added FTS5 BM25 as second retrieval signal (70% cosine + 20% BM25 + 10% recency) |
+
 ## What it measures
 
-- **Accuracy** — LLM judge (binary CORRECT/WRONG) at top-10 / top-20 / top-50 / top-200 cutoffs  
-- **Per-category breakdown** — multi-hop, temporal, open-domain, single-hop  
+- **Accuracy** — LLM judge (binary CORRECT/WRONG) at top-10 / top-20 / top-50 / top-200 cutoffs
+- **Per-category breakdown** — multi-hop, temporal, open-domain, single-hop
 - **Latency** — search latency per query (reported in per-question JSON)
+
+## Retrieval architecture
+
+superdupermemory uses a **three-signal blended score**:
+
+```
+score = 0.70 × cosine_similarity   (semantic embedding match)
+      + 0.20 × BM25_normalized     (FTS5 keyword match, via SQLite facts_fts)
+      + 0.10 × recency_decay       (exp(-0.005 × days), half-life ~139 days)
+```
+
+BM25 is particularly effective for exact-match queries (names, dates, specific terms)
+that semantic search alone can miss in large corpora.
 
 ## Setup
 
@@ -22,9 +56,7 @@ Set your OpenAI key (used for answer generation, judging, and SDM extraction):
 
 ```sh
 export OPENAI_API_KEY=sk-...
-# If using Anthropic for SDM extraction:
-export ANTHROPIC_API_KEY=sk-ant-...
-export SDM_EXTRACTOR=anthropic
+export SDM_EXTRACTOR=openai
 ```
 
 Build the superdupermemory binary and put it on PATH (or pass `--sdm-binary`):
