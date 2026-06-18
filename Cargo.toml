@@ -4,6 +4,7 @@ members = [
     "crates/store",
     "crates/embed",
     "crates/server",
+    "crates/api",
     "crates/eval",
 ]
 resolver = "2"
@@ -53,7 +54,15 @@ aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 
+# HTTP server
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+include_dir = "0.7"
+mime_guess = "2"
+
 # internal crates
 superdupermemory-core = { path = "crates/core" }
 superdupermemory-store = { path = "crates/store" }
 superdupermemory-embed = { path = "crates/embed" }
+superdupermemory-api = { path = "crates/api" }

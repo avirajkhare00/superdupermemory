@@ -7,6 +7,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use rmcp::{ServiceExt, transport::stdio};
+use superdupermemory_api::{ApiState, serve as serve_http};
 use superdupermemory_core::extractor::{AnthropicExtractor, OpenAIExtractor};
 use superdupermemory_embed::{Embedder, FastEmbedder, OpenAIEmbedder};
 use superdupermemory_store::{Cipher, MemoryStore, SqliteStore};
@@ -29,6 +30,13 @@ struct Cli {
 enum Command {
     /// Start the MCP server over stdio (default when no subcommand given).
     Serve,
+
+    /// Start the HTTP server with the web dashboard and REST API.
+    ServeWeb {
+        /// Port to listen on.
+        #[arg(long, env = "SDM_HTTP_PORT", default_value_t = 3000)]
+        port: u16,
+    },
 
     /// Write MCP config for Claude Code, Cursor, and/or Codex CLI.
     Install {
@@ -129,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => run_serve(&db_path).await,
 
+        Command::ServeWeb { port } => run_serve_web(&db_path, port).await,
+
         Command::Install { claude_code, cursor, codex } => {
             install::run(claude_code, cursor, codex)
         }
@@ -213,6 +223,49 @@ async fn run_serve(db_path: &str) -> anyhow::Result<()> {
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+async fn run_serve_web(db_path: &str, port: u16) -> anyhow::Result<()> {
+    let cipher = load_cipher()?;
+
+    let extractor_kind = std::env::var("SDM_EXTRACTOR").unwrap_or_else(|_| "anthropic".into());
+    let extractor: Arc<dyn superdupermemory_core::Extractor> = match extractor_kind.as_str() {
+        "openai" => {
+            let key = std::env::var("OPENAI_API_KEY")
+                .context("OPENAI_API_KEY required when SDM_EXTRACTOR=openai")?;
+            let mut e = OpenAIExtractor::new(key);
+            if let Ok(m) = std::env::var("SDM_EXTRACTOR_MODEL") { e = e.with_model(m); }
+            Arc::new(e)
+        }
+        _ => {
+            let key = std::env::var("ANTHROPIC_API_KEY")
+                .context("ANTHROPIC_API_KEY required when SDM_EXTRACTOR=anthropic (default)")?;
+            let mut e = AnthropicExtractor::new(key);
+            if let Ok(m) = std::env::var("SDM_EXTRACTOR_MODEL") { e = e.with_model(m); }
+            Arc::new(e)
+        }
+    };
+
+    let embedder_kind = std::env::var("SDM_EMBEDDER").unwrap_or_else(|_| "local".into());
+    let embedder: Arc<dyn Embedder> = match embedder_kind.as_str() {
+        "openai" => {
+            let key = std::env::var("OPENAI_API_KEY")
+                .context("OPENAI_API_KEY required when SDM_EMBEDDER=openai")?;
+            let mut e = OpenAIEmbedder::new(key);
+            if let Ok(m) = std::env::var("SDM_EMBEDDER_MODEL") { e = e.with_model(m); }
+            Arc::new(e)
+        }
+        _ => {
+            let e = tokio::task::spawn_blocking(|| FastEmbedder::new())
+                .await
+                .context("embedder init panicked")??;
+            Arc::new(e)
+        }
+    };
+
+    let store = Arc::new(open_store(db_path, cipher)?);
+    let state = ApiState { store, extractor, embedder };
+    serve_http(state, port).await
 }
 
 async fn run_inspect(db_path: &str, limit: usize, cipher: Option<Cipher>) -> anyhow::Result<()> {

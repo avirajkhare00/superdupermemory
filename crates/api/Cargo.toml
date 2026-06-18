@@ -1,26 +1,26 @@
 [package]
-name = "superdupermemory"
-description = "Local-first memory layer for AI agents, exposed over MCP"
+name = "superdupermemory-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[[bin]]
-name = "superdupermemory"
-path = "src/main.rs"
-
 [dependencies]
 superdupermemory-core.workspace = true
 superdupermemory-store.workspace = true
 superdupermemory-embed.workspace = true
-superdupermemory-api.workspace = true
+
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+include_dir.workspace = true
+mime_guess.workspace = true
 
 tokio.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-schemars.workspace = true
-rmcp.workspace = true
-dotenvy.workspace = true
-clap.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rand.workspace = true
+base64.workspace = true

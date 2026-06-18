@@ -1,258 +1,197 @@
 # superdupermemory
 
-Local-first, Rust-native persistent memory for AI agents, exposed over [MCP](https://modelcontextprotocol.io/).
+Local-first memory layer for AI agents, exposed over MCP and HTTP.
 
-Agents are stateless between sessions. Every conversation re-establishes context the user has already provided. Superdupermemory fixes that: it extracts discrete facts from conversations, stores them in a local SQLite database, and makes them instantly searchable — so any MCP-compatible agent (Claude Code, Cursor, Codex CLI, etc.) can remember and recall what matters across sessions and process restarts.
+Built in Rust. Uses SQLite for storage and fastembed for local embeddings — no external services required except an LLM for fact extraction (Anthropic or OpenAI).
 
-## Features
+---
 
-- **Three MCP tools** — `remember`, `recall`, `forget`
-- **Extraction pipeline** — LLM call turns raw conversational text into discrete, attributable facts (Anthropic or OpenAI, configurable)
-- **Semantic search** — local embedding model (AllMiniLM-L6-v2 via fastembed) or OpenAI `text-embedding-3-small`, cosine similarity ranked
-- **Update semantics** — same-subject facts are upserted; previous value is preserved in `previous_body`
-- **Crash-safe storage** — SQLite with WAL mode, schema versioning, online backup/restore
-- **Access tracking** — `access_count` and `last_accessed_at` updated on every recall, foundation for future decay scoring
-- **Encryption at rest** — AES-256-GCM field encryption of fact bodies, activated via `SDM_ENCRYPTION_KEY`
-- **Audit log** — every `remember` and `forget` event is logged with subject, source, and timestamp
-- **One-command install** — `superdupermemory install` writes MCP config for Claude Code, Cursor, and Codex CLI
-- **Offline benchmark** — `superdupermemory bench` measures insert rate and recall latency with no network calls
-- **Eval harness** — 28 deterministic, LLM-free test cases across 7 categories with hit@1/hit@k/MRR/p50/p95 metrics
-- **Zero cloud dependency** — fully offline when using local embedder + local extractor
+## Two modes
+
+| Mode | Use case |
+|------|----------|
+| **MCP server** (stdio) | Personal memory for Claude Code, Cursor, Codex CLI |
+| **HTTP server** | Multi-tenant memory API for your AI products |
+
+---
+
+## Quick start — self-hosted (one line)
+
+### Docker Compose
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avirajkhare00/superdupermemory/master/docker-compose.yml -o docker-compose.yml
+ANTHROPIC_API_KEY=sk-ant-... docker compose up -d
+```
+
+Open `http://localhost:3000` — create your org, get an API key, start storing memories.
+
+### Debian / Ubuntu VM
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avirajkhare00/superdupermemory/master/install.sh | sudo bash
+```
+
+Then edit `/etc/superdupermemory/env` with your API key and restart:
+
+```bash
+sudo systemctl restart superdupermemory
+```
+
+---
+
+## HTTP API
+
+The web server (`serve-web`) exposes a REST API under `/api/v1`.
+
+### Authentication
+
+| Header | Used for |
+|--------|----------|
+| `X-Admin-Token: <token>` | Org management (create apps, view stats) |
+| `Authorization: Bearer <api_key>` | App-level memory operations |
+
+### Multi-tenant model
+
+```
+Organization  ←  your company
+  └── App      ←  your AI product (gets an API key)
+        └── User  ←  your end user (identified by any string ID)
+              └── Memories
+```
+
+### Endpoints
+
+```
+GET  /api/v1/health
+
+POST /api/v1/orgs                          Create org → returns admin_token (once)
+GET  /api/v1/orgs/:id/apps                 List apps
+POST /api/v1/orgs/:id/apps                 Create app → returns api_key (once)
+GET  /api/v1/orgs/:id/stats                Org-level stats
+
+GET  /api/v1/apps/:id/users                List users + memory counts
+
+POST /api/v1/memories                      Store memory for a user
+GET  /api/v1/memories?user_id=&q=&limit=   Recall memories (semantic search)
+DELETE /api/v1/memories/:id?user_id=       Delete a memory
+```
+
+### Store a memory
+
+```bash
+curl -X POST http://localhost:3000/api/v1/memories \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice@example.com", "text": "Alice is the head of engineering. She loves coffee."}'
+```
+
+Response:
+```json
+{
+  "facts": [
+    { "id": "...", "subject": "user.role", "body": "Alice is the head of engineering." },
+    { "id": "...", "subject": "user.preference", "body": "Alice loves coffee." }
+  ]
+}
+```
+
+### Recall memories
+
+```bash
+curl "http://localhost:3000/api/v1/memories?user_id=alice@example.com&q=what+does+alice+like&limit=5" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+---
+
+## MCP server (personal mode)
+
+Add to your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "superdupermemory": {
+      "command": "superdupermemory",
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+Or auto-install for Claude Code / Cursor:
+
+```bash
+superdupermemory install --claude-code
+superdupermemory install --cursor
+```
+
+---
+
+## Configuration
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `SDM_DB_PATH` | `~/.superdupermemory/memory.db` | SQLite database path |
+| `SDM_HTTP_PORT` | `3000` | HTTP server port |
+| `SDM_EXTRACTOR` | `anthropic` | Fact extractor: `anthropic` or `openai` |
+| `SDM_EMBEDDER` | `local` | Embedder: `local` (fastembed) or `openai` |
+| `ANTHROPIC_API_KEY` | — | Required when extractor=anthropic |
+| `OPENAI_API_KEY` | — | Required when extractor/embedder=openai |
+| `SDM_ENCRYPTION_KEY` | — | Optional AES-256-GCM key (hex) for at-rest encryption |
+
+---
+
+## Build from source
+
+```bash
+# Build the webapp first
+cd webapp && npm install && npm run build && cd ..
+
+# Build the binary (webapp is embedded)
+cargo build --release --bin superdupermemory
+
+# Run the HTTP server
+ANTHROPIC_API_KEY=sk-ant-... ./target/release/superdupermemory serve-web
+```
+
+---
+
+## CLI commands
+
+```
+superdupermemory                  Start MCP server (stdio)
+superdupermemory serve-web        Start HTTP server + dashboard
+superdupermemory install          Install MCP config for Claude Code / Cursor
+superdupermemory inspect          List stored facts
+superdupermemory stats            Database statistics
+superdupermemory audit            Recent memory events
+superdupermemory backup <dest>    Backup database
+superdupermemory restore <src>    Restore database
+superdupermemory prune --days 90  Delete stale facts
+```
+
+---
 
 ## Architecture
 
 ```
-crates/
-  core/    — Fact struct, Extractor trait, Anthropic + OpenAI extractors
-  store/   — MemoryStore trait, SQLite implementation, AES-256-GCM cipher
-  embed/   — Embedder trait, FastEmbedder (local) + OpenAIEmbedder
-  server/  — MCP server binary with CLI subcommands
-  eval/    — Deterministic eval harness
+superdupermemory (single binary)
+├── MCP server (stdio)       ← Claude Code, Cursor, Codex CLI
+├── HTTP server (axum)       ← REST API + embedded React dashboard
+│   ├── /api/v1/*            ← Multi-tenant memory API
+│   └── /*                   ← React SPA (embedded at compile time)
+├── crates/core              ← Fact extraction (Anthropic / OpenAI)
+├── crates/store             ← SQLite storage + hybrid search (semantic + BM25)
+├── crates/embed             ← Embeddings (fastembed local / OpenAI)
+└── webapp/                  ← React + Vite + Tailwind dashboard
 ```
 
-## Quick start
-
-### Prerequisites
-
-- Rust 1.78+
-- An Anthropic or OpenAI API key (for fact extraction)
-
-### Build
-
-```sh
-git clone https://github.com/avirajkhare00/superdupermemory
-cd superdupermemory
-cargo build --release
-```
-
-The binary is at `target/release/superdupermemory`.
-
-### Configure
-
-Create a `.env` file (or export these variables):
-
-```sh
-# Required for extraction (pick one)
-ANTHROPIC_API_KEY=sk-ant-...
-# or
-OPENAI_API_KEY=sk-...
-SDM_EXTRACTOR=openai          # default: anthropic
-
-# Optional overrides
-SDM_EXTRACTOR_MODEL=gpt-5.4-mini        # default depends on provider
-SDM_EMBEDDER=openai                     # default: local
-SDM_DB_PATH=~/.superdupermemory/memory.db  # default
-
-# Optional: encrypt fact bodies at rest with AES-256-GCM
-SDM_ENCRYPTION_KEY=<64 hex characters>  # generate with: openssl rand -hex 32
-```
-
-### Add to your agent
-
-Run the install command to auto-write config for all supported clients:
-
-```sh
-superdupermemory install
-```
-
-Or target a specific client:
-
-```sh
-superdupermemory install --claude-code   # ~/.claude/settings.json
-superdupermemory install --cursor        # ~/.cursor/mcp.json
-superdupermemory install --codex         # prints YAML snippet to stdout
-```
-
-To add manually to Claude Code:
-
-```sh
-claude mcp add superdupermemory -- /path/to/superdupermemory serve
-```
-
-## CLI
-
-```
-superdupermemory [--db <path>] <subcommand>
-
-Subcommands:
-  serve      Start the MCP server over stdio (default when no subcommand given)
-  install    Write MCP config for Claude Code, Cursor, and/or Codex CLI
-  inspect    List recent facts stored in memory
-  stats      Show database statistics
-  audit      Show the audit log (remember/forget events)
-  backup     Online backup to a file (safe while server is running)
-  restore    Restore from a backup file
-  check      Run SQLite integrity check
-  bench      Run an insert + recall benchmark using the local embedder
-  prune      Delete facts not accessed or updated within the last N days
-```
-
-Examples:
-
-```sh
-# Auto-install for all supported clients
-superdupermemory install
-
-# Show what's stored (decrypts if SDM_ENCRYPTION_KEY is set)
-superdupermemory inspect --limit 50
-
-# Show audit history
-superdupermemory audit --limit 100
-
-# Database stats
-superdupermemory stats
-
-# Back up
-superdupermemory backup ~/backups/memory-$(date +%Y%m%d).db
-
-# Benchmark (offline, no API calls)
-superdupermemory bench --facts 200 --queries 50
-
-# Prune facts untouched for 90 days (dry-run first)
-superdupermemory prune --days 90 --dry-run
-superdupermemory prune --days 90
-
-# Check integrity
-superdupermemory check
-```
-
-## MCP tools
-
-### `remember`
-
-Extracts facts from free text and stores them.
-
-```
-remember(text: "I prefer Rust for systems work and Neovim as my editor")
-```
-
-### `recall`
-
-Semantic search over stored facts.
-
-```
-recall(query: "what editor does the user prefer?", limit: 5)
-```
-
-### `forget`
-
-Delete a fact by ID.
-
-```
-forget(id: "uuid-of-the-fact")
-```
-
-## Encryption at rest
-
-Set `SDM_ENCRYPTION_KEY` to a 64-character hex string (32 bytes) to enable AES-256-GCM encryption of fact `body` and `previous_body` fields before they are written to SQLite.
-
-```sh
-# Generate a key
-openssl rand -hex 32
-
-# Add to .env
-SDM_ENCRYPTION_KEY=a3f1...
-```
-
-Encrypted values are stored with a `$enc$` prefix. Data stored before the key was set is read as plaintext and re-encrypted on the next update — there is no forced migration. Removing the key from the environment leaves encrypted rows unreadable until it is restored.
-
-## Audit log
-
-Every `remember` and `forget` call is logged to an `audit_log` table with the event type (`remember_create`, `remember_update`, `forget`), fact ID, subject, source, and timestamp. View it with:
-
-```sh
-superdupermemory audit --limit 50
-```
-
-## How the AI decides what to remember
-
-Superdupermemory does not store anything automatically. The agent only remembers when it explicitly calls the `remember` tool — which means you control what gets stored by instructing the agent in your `CLAUDE.md`.
-
-The recommended pattern is a standing instruction at the end of your `CLAUDE.md`:
-
-```markdown
-At the end of every session, call superdupermemory remember() with any new facts
-learned about the user, their preferences, project decisions, or technical choices.
-At the start of every session, call superdupermemory recall() to load relevant context.
-```
-
-With this in place:
-- The agent loads what it already knows at session start
-- It stores new facts it learned at session end
-- You stay in control of what counts as "memory-worthy" — the agent judges this, not an automated trigger
-
-**Why not store everything automatically?** Storing every file path, error message, and intermediate thought would flood the database with noise. The extraction pipeline already distills raw text into discrete facts — you still need the agent to decide *what text* is worth feeding it.
-
-See [`CLAUDE.example.md`](CLAUDE.example.md) for a ready-to-use template.
-
-## Eval harness
-
-Run the full eval suite (downloads the local embedding model on first run):
-
-```sh
-cargo run --bin sdm-eval
-
-# Specific category
-cargo run --bin sdm-eval -- --category disambiguation
-
-# Save a baseline, then compare after changes
-cargo run --bin sdm-eval -- --save
-# ... make changes ...
-cargo run --bin sdm-eval -- --compare
-
-# JSON output
-cargo run --bin sdm-eval -- --json
-```
-
-Categories: `basic_recall`, `semantic_recall`, `multi_fact`, `contradiction`, `forget`, `disambiguation`, `scale`
-
-## Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `SDM_DB_PATH` | `~/.superdupermemory/memory.db` | SQLite database path |
-| `SDM_EXTRACTOR` | `anthropic` | Extraction provider: `anthropic` or `openai` |
-| `SDM_EXTRACTOR_MODEL` | provider default | Override the extraction model |
-| `SDM_EMBEDDER` | `local` | Embedding provider: `local` or `openai` |
-| `SDM_EMBEDDER_MODEL` | provider default | Override the embedding model |
-| `SDM_ENCRYPTION_KEY` | — | 64 hex chars — enables AES-256-GCM encryption at rest |
-| `ANTHROPIC_API_KEY` | — | Required when `SDM_EXTRACTOR=anthropic` |
-| `OPENAI_API_KEY` | — | Required when `SDM_EXTRACTOR=openai` or `SDM_EMBEDDER=openai` |
-
-> **Note:** Switching embedders on an existing database requires re-indexing. The local model (AllMiniLM-L6-v2) produces 384-dimensional vectors; OpenAI `text-embedding-3-small` produces 1536-dimensional vectors — they are not compatible.
-
-## Roadmap
-
-| Phase | Status | Focus |
-|---|---|---|
-| 0 | Done | Workspace scaffold, traits, MCP server compiles |
-| 1 | Done | `remember` / `recall` / `forget` end-to-end pipeline |
-| 2 | Done | Eval harness — 28 cases, metrics, baseline comparison |
-| 3 | Done | Crash-safe storage, access tracking, CLI subcommands |
-| 4 | Done | `install` subcommand — auto-configure Claude Code, Cursor, Codex CLI |
-| 5 | Done | AES-256-GCM encryption at rest, audit log |
-| 6 | Done | `bench` subcommand — offline insert/recall benchmark with p50/p95 |
+---
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache 2.0

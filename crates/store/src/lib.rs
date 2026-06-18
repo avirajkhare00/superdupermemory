@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod sqlite;
+pub mod tenant;
 
 use async_trait::async_trait;
 use superdupermemory_core::Fact;
@@ -16,3 +17,4 @@ pub trait MemoryStore: Send + Sync {
 
 pub use crypto::Cipher;
 pub use sqlite::{AuditEntry, SqliteStore};
+pub use tenant::{App, AppUser, Org, OrgStats, UserWithCount};
