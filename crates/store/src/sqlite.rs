@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 use std::sync::{Arc, Mutex};
 
@@ -126,6 +126,41 @@ impl SqliteStore {
             )?;
             conn.execute(
                 "UPDATE meta SET value = '2' WHERE key = 'schema_version'",
+                [],
+            )?;
+        }
+
+        // v3 — FTS5 full-text index for BM25 retrieval.
+        if version < 3 {
+            conn.execute_batch(
+                // External-content FTS5 table backed by facts.subject + facts.body.
+                // Works correctly only on unencrypted databases; silently degrades
+                // to semantic-only on encrypted ones (BM25 scores will be 0).
+                "CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+                    subject, body,
+                    content='facts',
+                    content_rowid='rowid'
+                );
+                -- Keep FTS index in sync with the facts table.
+                CREATE TRIGGER IF NOT EXISTS facts_fts_ai AFTER INSERT ON facts BEGIN
+                    INSERT INTO facts_fts(rowid, subject, body)
+                    VALUES (new.rowid, new.subject, new.body);
+                END;
+                CREATE TRIGGER IF NOT EXISTS facts_fts_ad AFTER DELETE ON facts BEGIN
+                    INSERT INTO facts_fts(facts_fts, rowid, subject, body)
+                    VALUES ('delete', old.rowid, old.subject, old.body);
+                END;
+                CREATE TRIGGER IF NOT EXISTS facts_fts_au AFTER UPDATE ON facts BEGIN
+                    INSERT INTO facts_fts(facts_fts, rowid, subject, body)
+                    VALUES ('delete', old.rowid, old.subject, old.body);
+                    INSERT INTO facts_fts(rowid, subject, body)
+                    VALUES (new.rowid, new.subject, new.body);
+                END;
+                -- Backfill existing facts into the FTS index.
+                INSERT INTO facts_fts(facts_fts) VALUES ('rebuild');",
+            )?;
+            conn.execute(
+                "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
                 [],
             )?;
         }
@@ -307,6 +342,123 @@ impl SqliteStore {
                 params![days as i64],
             )?;
             Ok(n)
+        })
+        .await
+    }
+
+    /// Hybrid search: 70 % cosine similarity + 20 % BM25 (FTS5) + 10 % recency.
+    /// Falls back gracefully to semantic-only if the FTS5 index is unavailable.
+    pub async fn search_blended(
+        &self,
+        query: &str,
+        embedding: &[f32],
+        limit: usize,
+    ) -> anyhow::Result<Vec<Fact>> {
+        let query_text = query.to_string();
+        let query_vec = embedding.to_vec();
+        let cipher = self.cipher.clone();
+
+        self.run(move |conn| {
+            let c = cipher.as_deref();
+
+            // ── BM25 via FTS5 ──────────────────────────────────────────────
+            let clean: String = query_text
+                .chars()
+                .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+                .collect();
+            let words: Vec<String> = clean
+                .split_whitespace()
+                .filter(|w| w.len() > 2)
+                .map(|w| format!("\"{}\"", w))
+                .collect();
+
+            let mut bm25_map: std::collections::HashMap<i64, f32> =
+                std::collections::HashMap::new();
+
+            if !words.is_empty() {
+                let fts_query = words.join(" OR ");
+                // Best-effort: silently skip if FTS5 table is missing.
+                let _ = (|| -> anyhow::Result<()> {
+                    let mut stmt = conn.prepare(
+                        "SELECT rowid, bm25(facts_fts) FROM facts_fts
+                         WHERE facts_fts MATCH ?1 LIMIT ?2",
+                    )?;
+                    let pairs = stmt
+                        .query_map(params![fts_query, (limit * 10) as i64], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    for (rowid, raw) in pairs {
+                        // raw is negative; more negative = better match.
+                        let abs = (-raw).max(0.0) as f32;
+                        bm25_map.insert(rowid, abs / (abs + 1.0));
+                    }
+                    Ok(())
+                })();
+            }
+
+            // ── Semantic: load all embedded facts ─────────────────────────
+            let mut stmt = conn.prepare(
+                "SELECT id, subject, body, source, previous_body,
+                        created_at, updated_at, embedding, last_accessed_at, rowid
+                 FROM facts WHERE embedding IS NOT NULL",
+            )?;
+
+            let mut rows: Vec<(Fact, Vec<f32>, String, i64)> = stmt
+                .query_map([], |row| {
+                    let fact = SqliteStore::row_to_fact(row)?;
+                    let blob: Vec<u8> = row.get(7)?;
+                    let last_accessed: Option<String> = row.get(8)?;
+                    let recency_date =
+                        last_accessed.unwrap_or_else(|| fact.updated_at.to_rfc3339());
+                    let rowid: i64 = row.get(9)?;
+                    Ok((fact, bytes_to_f32(&blob), recency_date, rowid))
+                })?
+                .collect::<Result<_, _>>()?;
+
+            if rows.is_empty() {
+                let mut stmt2 = conn.prepare(
+                    "SELECT id, subject, body, source, previous_body, created_at, updated_at
+                     FROM facts ORDER BY updated_at DESC LIMIT ?1",
+                )?;
+                let fallback: Vec<Fact> = stmt2
+                    .query_map(params![limit as i64], SqliteStore::row_to_fact)?
+                    .collect::<Result<_, _>>()?;
+                return fallback
+                    .into_iter()
+                    .map(|f| decrypt_fact(f, c))
+                    .collect::<anyhow::Result<_>>();
+            }
+
+            // ── Blended sort: 70% cosine + 20% BM25 + 10% recency ─────────
+            rows.sort_by(|(_, emb_a, rec_a, rid_a), (_, emb_b, rec_b, rid_b)| {
+                let cos_a = cosine_similarity(&query_vec, emb_a);
+                let cos_b = cosine_similarity(&query_vec, emb_b);
+                let bm25_a = bm25_map.get(rid_a).copied().unwrap_or(0.0);
+                let bm25_b = bm25_map.get(rid_b).copied().unwrap_or(0.0);
+                let score_a = 0.70 * cos_a + 0.20 * bm25_a + 0.10 * recency_score(rec_a);
+                let score_b = 0.70 * cos_b + 0.20 * bm25_b + 0.10 * recency_score(rec_b);
+                score_b
+                    .partial_cmp(&score_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let top: Vec<Fact> = rows
+                .into_iter()
+                .take(limit)
+                .map(|(f, _, _, _)| decrypt_fact(f, c))
+                .collect::<anyhow::Result<_>>()?;
+
+            let now = chrono::Utc::now().to_rfc3339();
+            for fact in &top {
+                let _ = conn.execute(
+                    "UPDATE facts SET access_count = access_count + 1,
+                     last_accessed_at = ?1 WHERE id = ?2",
+                    params![now, fact.id],
+                );
+            }
+
+            Ok(top)
         })
         .await
     }

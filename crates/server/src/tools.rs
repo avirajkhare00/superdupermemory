@@ -116,7 +116,7 @@ impl MemoryServer {
             Err(e) => return format!("error: embedding failed — {e}"),
         };
 
-        match self.store.search_by_embedding(&embedding, limit).await {
+        match self.store.search_blended(&params.query, &embedding, limit).await {
             Ok(facts) if facts.is_empty() => "No matching facts found.".to_string(),
             Ok(facts) => facts
                 .iter()
