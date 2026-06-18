@@ -72,7 +72,20 @@ impl MemoryServer {
         // 1. Extract discrete facts from raw text.
         let facts = match self.extractor.extract(&params.text, &source).await {
             Ok(f) if !f.is_empty() => f,
-            Ok(_) => vec![Fact::new("raw.text", &params.text, &source)],
+            Ok(_) => {
+                // Strip any "[Session date: ...]" header before storing as raw text
+                // so bare date strings don't pollute recall results.
+                let raw = params.text.trim();
+                let body = if raw.starts_with("[Session date:") {
+                    raw.lines().skip(1).collect::<Vec<_>>().join("\n")
+                } else {
+                    raw.to_string()
+                };
+                if body.trim().is_empty() {
+                    return "ok: 0 fact(s) stored".to_string();
+                }
+                vec![Fact::new("raw.text", &body, &source)]
+            }
             Err(e) => return format!("error: extraction failed — {e}"),
         };
 

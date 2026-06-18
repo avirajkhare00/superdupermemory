@@ -12,9 +12,11 @@ pub trait Extractor: Send + Sync {
 
 const EXTRACTION_SYSTEM_PROMPT: &str = r#"You are a memory extraction assistant. Given a block of text, extract discrete facts about the user, their projects, preferences, or decisions.
 
+If the text begins with a "[Session date: Month DD, YYYY]" header, use that date to resolve any relative time references (e.g. "yesterday", "last Friday", "last week", "next Monday") to their actual calendar dates before extracting facts. Include the resolved absolute date in the fact body when the timing is relevant.
+
 Return a JSON array of objects. Each object must have:
-- "subject": a short dot-separated label (e.g. "user.name", "project.goal", "preference.editor")
-- "body": a complete sentence stating the fact (e.g. "The user's name is Aviraj.")
+- "subject": a short dot-separated label (e.g. "user.name", "project.goal", "preference.editor", "user.event")
+- "body": a complete sentence stating the fact, with any relative dates resolved to absolute dates (e.g. "The user's name is Aviraj.", "Caroline went to an LGBTQ support group on May 7, 2023.")
 
 Return ONLY the JSON array, no explanation."#;
 
