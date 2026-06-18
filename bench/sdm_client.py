@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,24 @@ class SdmClient:
                     return None
                 await asyncio.sleep(2.0 * (attempt + 1))
 
+    @staticmethod
+    def _parse_recall_text(text: str) -> list[dict]:
+        """Parse plain-text recall output ('[uuid] subject: body\\n...') into fact dicts."""
+        if not text or "No matching" in text or text.startswith("error:"):
+            return []
+        facts = []
+        for line in text.strip().split("\n"):
+            m = re.match(r'\[([^\]]+)\]\s+(\S[^:]*?):\s+(.+)', line)
+            if m:
+                facts.append({
+                    "id": m.group(1).strip(),
+                    "subject": m.group(2).strip(),
+                    "body": m.group(3).strip(),
+                    "created_at": "",
+                    "updated_at": "",
+                })
+        return facts
+
     async def search(
         self,
         query: str,
@@ -202,7 +221,12 @@ class SdmClient:
                     "query": query,
                     "limit": top_k,
                 })
-                facts = result if isinstance(result, list) else []
+                if isinstance(result, list):
+                    facts = result
+                elif isinstance(result, str):
+                    facts = self._parse_recall_text(result)
+                else:
+                    facts = []
                 return [
                     {
                         "memory": f.get("body", ""),
