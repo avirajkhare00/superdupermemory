@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,17 @@ class SdmClient:
         if user_id in self._processes:
             await self._processes.pop(user_id).close()
 
+    @staticmethod
+    def _epoch_to_date_prefix(timestamp: int | None) -> str:
+        """Convert a Unix epoch to a '[Session date: Month DD, YYYY]' prefix."""
+        if timestamp is None:
+            return ""
+        try:
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            return f"[Session date: {dt.strftime('%B %d, %Y')}]\n"
+        except (OSError, OverflowError, ValueError):
+            return ""
+
     async def add(
         self,
         messages: list[dict[str, str]],
@@ -164,6 +176,10 @@ class SdmClient:
         )
         if not text.strip():
             return {"results": []}
+
+        date_prefix = self._epoch_to_date_prefix(timestamp)
+        if date_prefix:
+            text = date_prefix + text
 
         for attempt in range(self.max_retries):
             try:
