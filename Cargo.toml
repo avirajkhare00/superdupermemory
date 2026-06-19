@@ -57,7 +57,11 @@ base64 = "0.22"
 # HTTP server
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 include_dir = "0.7"
 mime_guess = "2"
 

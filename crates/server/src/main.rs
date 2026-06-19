@@ -131,6 +131,12 @@ fn open_store(db_path: &str, cipher: Option<Cipher>) -> anyhow::Result<SqliteSto
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "superdupermemory=info,tower_http=info".parse().unwrap()),
+        )
+        .init();
     let cli = Cli::parse();
     let db_path = resolve_db_path(&cli.db);
 

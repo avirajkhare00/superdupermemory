@@ -10,7 +10,7 @@ use axum::{
 };
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::CorsLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use superdupermemory_core::{Extractor, Fact};
 use superdupermemory_embed::Embedder;
@@ -321,6 +321,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/memories", post(remember).get(recall))
         .route("/api/v1/memories/:id", delete(forget))
         .fallback(serve_static)
+        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -329,7 +330,7 @@ pub async fn serve(state: ApiState, port: u16) -> anyhow::Result<()> {
     let app = router(state);
     let addr = format!("0.0.0.0:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    println!("superdupermemory web server listening on http://{addr}");
+    tracing::info!("listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -16,6 +16,8 @@ tower-http.workspace = true
 include_dir.workspace = true
 mime_guess.workspace = true
 
+tracing.workspace = true
+
 tokio.workspace = true
 anyhow.workspace = true
 serde.workspace = true
