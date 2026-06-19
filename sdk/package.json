@@ -1,6 +1,6 @@
 {
   "name": "superdupermemory",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for superdupermemory — local-first memory layer for AI agents",
   "keywords": ["memory", "ai", "agents", "mcp", "llm"],
   "license": "Apache-2.0",
