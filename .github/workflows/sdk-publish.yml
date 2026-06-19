@@ -1,0 +1,24 @@
+name: Publish SDK
+
+on:
+  push:
+    tags: ['sdk/v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci --prefix sdk
+
+      - run: npm run build --prefix sdk
+
+      - run: npm publish --prefix sdk --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.prod }}
