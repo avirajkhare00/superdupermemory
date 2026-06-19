@@ -35,7 +35,7 @@ thiserror = "2"
 rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
 
 # storage
-rusqlite = { version = "0.40.1", features = ["bundled", "backup"] }
+rusqlite = { version = "0.39", features = ["bundled", "backup"] }
 
 # embeddings
 fastembed = "5.17.2"
