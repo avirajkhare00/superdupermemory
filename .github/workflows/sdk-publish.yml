@@ -7,6 +7,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: prod
+    defaults:
+      run:
+        working-directory: sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -15,10 +19,10 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm ci --prefix sdk
+      - run: npm ci
 
-      - run: npm run build --prefix sdk
+      - run: npm run build
 
-      - run: npm publish --prefix sdk --access public
+      - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.prod }}
