@@ -8,6 +8,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: prod
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     defaults:
       run:
         working-directory: sdk
@@ -25,4 +27,4 @@ jobs:
 
       - run: npm publish --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.prod }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
