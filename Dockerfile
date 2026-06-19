@@ -8,7 +8,7 @@ RUN npm run build
 
 # ── stage 2: build backend ─────────────────────────────────────────────────
 FROM rust:1.88-slim-bookworm AS builder
-RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 COPY --from=frontend /webapp/dist ./webapp/dist
